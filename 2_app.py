@@ -11,6 +11,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_community.retrievers import BM25Retriever
+from langchain_classic.retrievers import EnsembleRetriever
 
 load_dotenv()
 
@@ -144,13 +146,18 @@ if uploaded_file is not None:
             tmp_file.write(uploaded_file.read())
             tmp_path = tmp_file.name
 
-        with st.spinner("Loading and processing your document..."):
-            loader = PyPDFLoader(tmp_path)
-            docs = loader.load()
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000, chunk_overlap=200
+        try:
+            with st.spinner("Loading and processing your document..."):
+                loader = PyPDFLoader(tmp_path)
+                docs = loader.load()
+                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                chunks = splitter.split_documents(docs)
+        except Exception as e:
+            st.error(
+                "Could not read this PDF. It may be encrypted, password-protected, "
+                f"or corrupted. ({type(e).__name__})"
             )
-            chunks = splitter.split_documents(docs)
+            st.stop()
 
 
         with st.spinner("Building knowledge base — this runs once per document..."):
@@ -161,6 +168,15 @@ if uploaded_file is not None:
         collection_name=f"doc_{uuid.uuid4().hex[:12]}"
          )
         retriever = vectordb.as_retriever(search_kwargs={"k": 10})
+        semantic_retriever = vectordb.as_retriever(search_kwargs={"k": 8})
+
+        bm25_retriever = BM25Retriever.from_documents(chunks)
+        bm25_retriever.k = 8
+
+        retriever = EnsembleRetriever(
+        retrievers=[semantic_retriever, bm25_retriever],
+        weights=[0.5, 0.5]
+         )
 
         llm = ChatOpenAI(
             model="gpt-4o-mini",
